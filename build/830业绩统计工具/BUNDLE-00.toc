@@ -1,0 +1,3 @@
+([('830业绩统计工具',
+   '/Users/cuiyanjun/PycharmProjects/830业绩统计/dist/830业绩统计工具',
+   'EXECUTABLE')],)
