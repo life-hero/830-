@@ -1,0 +1,25 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:   # 允许手动触发
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller pandas openpyxl pillow
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --windowed --name="830业绩统计工具" --icon="favicon.ico" --hidden-import=openpyxl --hidden-import=pandas main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 830业绩统计工具
+          path: dist/*.exe
