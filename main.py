@@ -1063,7 +1063,7 @@ class GUIApp:
     def __init__(self, master: tk.Tk) -> None:
         self.master = master
         master.title("分组统计工具")
-        master.geometry("800x600")
+        master.geometry("800x800")
         master.resizable(True, True)
 
         self.data_file_path = tk.StringVar()
@@ -1087,7 +1087,7 @@ class GUIApp:
         top_frame = tk.Frame(self.master)
         top_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        hint_label = tk.Label(top_frame, text="使用说明", font=('Arial', 12, 'bold'))
+        hint_label = tk.Label(top_frame, text="使用说明-Copyright 2026 Cuiyj", font=('Arial', 12, 'bold'))
         hint_label.pack(anchor='w')
 
         hint_text = scrolledtext.ScrolledText(
@@ -1131,25 +1131,25 @@ class GUIApp:
         bottom_frame.pack(fill=tk.X, padx=10, pady=10)
 
         # ----- 功能区1：统计 -----
-        group1 = tk.LabelFrame(bottom_frame, text="数据统计", padx=5, pady=5)
+        group1 = tk.LabelFrame(bottom_frame, text="第一步：从原始数据统计出分类数据", padx=5, pady=5)
         group1.pack(fill=tk.X, pady=5)
 
         row1 = tk.Frame(group1)
         row1.pack(fill=tk.X, pady=2)
 
         tk.Label(row1, text="数据文件:", width=10, anchor='w').pack(side=tk.LEFT)
-        entry_data = tk.Entry(row1, textvariable=self.data_file_path, width=50, state='readonly')
+        entry_data = tk.Entry(row1, textvariable=self.data_file_path, width=35, state='readonly')
         entry_data.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        self.btn_add_data = tk.Button(row1, text="添加数据文件", command=self._select_data_file)
+        self.btn_add_data = tk.Button(row1, text="添加接单明细数据文件", command=self._select_data_file)
         self.btn_add_data.pack(side=tk.LEFT, padx=2)
 
-        self.btn_stat = tk.Button(row1, text="统计", command=self._run_statistics)
+        self.btn_stat = tk.Button(row1, text="生成统计数据", command=self._run_statistics)
         self.btn_stat.pack(side=tk.LEFT, padx=2)
 
         # ----- 功能区2：Excel 转 HTML -----
         # ----- 功能区2：Excel 转 HTML -----
-        group2 = tk.LabelFrame(bottom_frame, text="Excel 转 HTML", padx=5, pady=5)
+        group2 = tk.LabelFrame(bottom_frame, text="第二步：将修改后的Excel 转 HTML", padx=5, pady=5)
         group2.pack(fill=tk.X, pady=5)
 
         row2 = tk.Frame(group2)
