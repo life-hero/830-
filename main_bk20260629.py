@@ -22,15 +22,22 @@ import time
 
 # ---------- 常量 ----------
 FONT_SIZE_HTML = 12
-DEBUG = True
+DEBUG = True  # 开启调试打印
+
 
 def debug_print(msg: str) -> None:
+    """调试打印函数"""
     if DEBUG:
         timestamp = time.strftime("%H:%M:%S")
         print(f"[{timestamp}] {msg}")
 
+
 # ---------- 分类映射 ----------
 def classify_main_type(val: str) -> str:
+    """
+    将产品主推类型映射为三大分类
+    TOP+/TOP是标准化，NON-TOP是配置化
+    """
     if val in ['TOP', 'TOP+']:
         return '标准化'
     elif val == 'NON-TOP':
@@ -39,6 +46,7 @@ def classify_main_type(val: str) -> str:
         return '定制化'
     else:
         return '其他'
+
 
 # ---------- 按销售大区统计 ----------
 def compute_region_stats(df: pd.DataFrame) -> Tuple[List[str], Dict[str, Any]]:
@@ -72,17 +80,22 @@ def compute_region_stats(df: pd.DataFrame) -> Tuple[List[str], Dict[str, Any]]:
     debug_print("compute_region_stats 完成")
     return sorted_regions, region_data
 
-# ---------- 核心数据处理 ----------
-def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
-    debug_print("开始 process_region_data")
 
-    grouped = df.groupby(
-        ['平台类别', '产品系列', '产品型号', '主推分类'],
-        as_index=False
-    ).agg({
-        '总面积': 'sum'
+# ---------- 核心数据处理 ----------
+def process_region_data_bkkk(df: pd.DataFrame) -> pd.DataFrame:
+    debug_print("开始 process_region_data")
+    # 1. 按平台类别+产品系列+产品型号汇总面积和订单数
+    grouped = df.groupby(['平台类别', '产品系列', '产品型号'], as_index=False).agg({
+        '总面积': 'sum',
+        '订单数量': 'sum'
     })
 
+    # 2. 合并主推分类信息，并添加定制原因
+    type_map = df[['产品型号', '产品主推类型（产品维度）', '主推分类']].drop_duplicates(subset='产品型号')
+    grouped = grouped.merge(type_map, on='产品型号', how='left')
+    grouped['定制原因'] = grouped['产品主推类型（产品维度）'].apply(lambda x: '定制' if x == '定制' else '')
+
+    # 3. 透视成三列（标准化/配置化/定制化）
     pivot_df = grouped.pivot_table(
         index=['平台类别', '产品系列', '产品型号'],
         columns='主推分类',
@@ -95,13 +108,12 @@ def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
         if cat not in pivot_df.columns:
             pivot_df[cat] = 0
 
-    custom_df = df[df['产品主推类型（产品维度）'] == '定制'][['产品型号']].drop_duplicates()
-    custom_df['定制原因'] = '定制'
-    pivot_df = pivot_df.merge(custom_df, on='产品型号', how='left')
-    pivot_df['定制原因'] = pivot_df['定制原因'].fillna('')
-
     pivot_df['面积汇总'] = pivot_df[['标准化', '配置化', '定制化']].sum(axis=1)
 
+    custom_map = grouped[['平台类别', '产品系列', '产品型号', '定制原因']].drop_duplicates()
+    pivot_df = pivot_df.merge(custom_map, on=['平台类别', '产品系列', '产品型号'], how='left')
+
+    # --- 按销售大区统计明细 ---
     region_stats = compute_region_stats(df)
     sorted_regions, region_data = region_stats
 
@@ -247,6 +259,211 @@ def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
 
     result_df = pd.DataFrame(rows)
 
+    new_cols = ['平台类别', '产品系列', '产品型号', '面积汇总', col_std, col_cfg, col_cus, '定制原因']
+    for region in sorted_regions:
+        for cat in ['标准化', '配置化', '定制化']:
+            new_cols.append(f"{region}_{cat}")
+    new_cols.append('总计')
+    result_df.columns = new_cols
+
+    result_df.attrs['sorted_regions'] = sorted_regions
+    result_df.attrs['region_data'] = region_data
+    result_df.attrs['region_area'] = {r: region_data[r]['面积汇总'] for r in sorted_regions}
+    result_df.attrs['region_ratio'] = {r: region_data[r]['占比'] for r in sorted_regions}
+    result_df.attrs['region_rank'] = {r: region_data[r]['排名'] for r in sorted_regions}
+
+    debug_print("process_region_data 完成")
+    return result_df
+
+
+def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
+    debug_print("开始 process_region_data")
+
+    # 1. 按 平台类别+产品系列+产品型号+主推分类 分组汇总面积
+    grouped = df.groupby(
+        ['平台类别', '产品系列', '产品型号', '主推分类'],
+        as_index=False
+    ).agg({
+        '总面积': 'sum'
+        # 订单数量如需可保留，但后续未使用，这里暂不处理
+    })
+
+    # 2. 透视，将主推分类展开为列
+    pivot_df = grouped.pivot_table(
+        index=['平台类别', '产品系列', '产品型号'],
+        columns='主推分类',
+        values='总面积',
+        aggfunc='sum',
+        fill_value=0
+    ).reset_index()
+
+    # 确保三列存在（标准化、配置化、定制化）
+    for cat in ['标准化', '配置化', '定制化']:
+        if cat not in pivot_df.columns:
+            pivot_df[cat] = 0
+
+    # 3. 提取定制原因（若某型号存在主推类型为“定制”的记录）
+    custom_df = df[df['产品主推类型（产品维度）'] == '定制'][['产品型号']].drop_duplicates()
+    custom_df['定制原因'] = '定制'
+    pivot_df = pivot_df.merge(custom_df, on='产品型号', how='left')
+    pivot_df['定制原因'] = pivot_df['定制原因'].fillna('')
+
+    # 4. 计算面积汇总（三列之和）
+    pivot_df['面积汇总'] = pivot_df[['标准化', '配置化', '定制化']].sum(axis=1)
+
+    # ---- 以下区域统计明细保持不变（region_group 本身已按主推分类分组） ----
+    region_stats = compute_region_stats(df)
+    sorted_regions, region_data = region_stats
+
+    region_group = df.groupby(['平台类别', '产品系列', '产品型号', '销售大区', '主推分类']).agg({
+        '总面积': 'sum'
+    }).reset_index()
+
+    region_pivot = region_group.pivot_table(
+        index=['平台类别', '产品系列', '产品型号'],
+        columns=['销售大区', '主推分类'],
+        values='总面积',
+        fill_value=0
+    ).reset_index()
+
+    # 提取键列（平台类别、产品系列、产品型号）与统计列合并
+    key_cols = ['平台类别', '产品系列', '产品型号']
+    keys = pd.DataFrame()
+    for col in key_cols:
+        found = False
+        for c in region_pivot.columns:
+            if col in str(c):
+                keys[col] = region_pivot[c]
+                found = True
+                break
+        if not found:
+            raise KeyError(f"在 region_pivot 中找不到列: {col}")
+
+    stat_cols = region_pivot.drop(columns=list(keys.columns))
+    stat_cols.columns = [
+        f"{col[0]}_{col[1]}" if isinstance(col, tuple) else str(col)
+        for col in stat_cols.columns
+    ]
+    region_pivot_flat = pd.concat([keys, stat_cols], axis=1)
+
+    # 合并到主透视表
+    pivot_df = pivot_df.merge(region_pivot_flat, on=key_cols, how='left')
+
+    # 补齐区域列（确保所有区域都存在）
+    region_cols = []
+    for region in sorted_regions:
+        for cat in ['标准化', '配置化', '定制化']:
+            region_cols.append(f"{region}_{cat}")
+
+    for col in region_cols:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+        else:
+            pivot_df[col] = pivot_df[col].fillna(0)
+
+    # 计算总计（区域所有分类之和）
+    pivot_df['总计'] = pivot_df[region_cols].sum(axis=1)
+
+    # 构建最终列顺序
+    base_cols = ['平台类别', '产品系列', '产品型号', '面积汇总', '标准化', '配置化', '定制化', '定制原因']
+    final_cols = base_cols + region_cols + ['总计']
+    for col in final_cols:
+        if col not in pivot_df.columns:
+            pivot_df[col] = 0
+
+    final_df = pivot_df[final_cols]
+
+    # 数值列取整
+    numeric_cols = ['面积汇总', '标准化', '配置化', '定制化'] + region_cols + ['总计']
+    for col in numeric_cols:
+        if col in final_df.columns:
+            final_df[col] = final_df[col].round(0).astype(int)
+
+    # 重新计算面积汇总（确保一致）
+    final_df['面积汇总'] = final_df['标准化'] + final_df['配置化'] + final_df['定制化']
+
+    platform_totals = final_df.groupby('平台类别')['面积汇总'].sum().to_dict()
+    final_df['_platform_total'] = final_df['平台类别'].map(platform_totals)
+
+    series_totals = final_df.groupby(['平台类别', '产品系列'])['面积汇总'].sum().to_dict()
+    final_df['_series_total'] = final_df.apply(
+        lambda r: series_totals.get((r['平台类别'], r['产品系列']), 0), axis=1
+    )
+
+    final_df = final_df.sort_values(
+        ['_platform_total', '_series_total', '面积汇总'],
+        ascending=[False, False, False]
+    ).drop(columns=['_platform_total', '_series_total']).reset_index(drop=True)
+
+    total_area = final_df['面积汇总'].sum()
+    total_std = final_df['标准化'].sum()
+    total_cfg = final_df['配置化'].sum()
+    total_cus = final_df['定制化'].sum()
+
+    std_ratio = (total_std / total_area * 100) if total_area else 0
+    cfg_ratio = (total_cfg / total_area * 100) if total_area else 0
+    cus_ratio = (total_cus / total_area * 100) if total_area else 0
+    col_std = f"标准化({std_ratio:.1f}%)"
+    col_cfg = f"配置化({cfg_ratio:.1f}%)"
+    col_cus = f"定制化({cus_ratio:.1f}%)"
+
+    rows = []
+
+    total_row_dict = {
+        '平台类别': '总计',
+        '产品系列': '',
+        '产品型号': '',
+        '面积汇总': total_area,
+        '标准化': total_std,
+        '配置化': total_cfg,
+        '定制化': total_cus,
+        '定制原因': ''
+    }
+    for region in sorted_regions:
+        for cat in ['标准化', '配置化', '定制化']:
+            col_name = f"{region}_{cat}"
+            total_row_dict[col_name] = final_df[col_name].sum()
+    total_row_dict['总计'] = final_df['总计'].sum()
+
+    top_total_row = total_row_dict.copy()
+    top_total_row['平台类别'] = ''
+    top_total_row['产品系列'] = ''
+    top_total_row['产品型号'] = ''
+    rows.append(top_total_row)
+
+    for plat, group in final_df.groupby('平台类别', sort=False):
+        for _, row in group.iterrows():
+            rows.append(row.to_dict())
+        g_sum_area = group['面积汇总'].sum()
+        g_sum_std = group['标准化'].sum()
+        g_sum_cfg = group['配置化'].sum()
+        g_sum_cus = group['定制化'].sum()
+        ratio = (g_sum_area / total_area * 100) if total_area != 0 else 0
+        ratio_text = f"占比 {ratio:.2f}%"
+        subtotal = {
+            '平台类别': f"{plat}汇总",
+            '产品系列': ratio_text,
+            '产品型号': '',
+            '面积汇总': g_sum_area,
+            '标准化': g_sum_std,
+            '配置化': g_sum_cfg,
+            '定制化': g_sum_cus,
+            '定制原因': ''
+        }
+        for region in sorted_regions:
+            for cat in ['标准化', '配置化', '定制化']:
+                col_name = f"{region}_{cat}"
+                if col_name in group.columns:
+                    subtotal[col_name] = group[col_name].sum()
+                else:
+                    subtotal[col_name] = 0
+        subtotal['总计'] = sum(subtotal[col] for col in region_cols)
+        rows.append(subtotal)
+
+    rows.append(total_row_dict)
+
+    result_df = pd.DataFrame(rows)
+
     new_cols = ['平台类别', '产品系列', '产品型号', '面积汇总', col_std, col_cfg, col_cus,
                 '定制原因']
     for region in sorted_regions:
@@ -262,7 +479,9 @@ def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
     result_df.attrs['region_rank'] = {r: region_data[r]['排名'] for r in sorted_regions}
 
     debug_print("process_region_data 完成")
+
     return result_df
+
 
 # ---------- Excel 合并与样式 ----------
 def apply_merges(
@@ -451,14 +670,28 @@ def apply_merges(
 
     debug_print("apply_merges 完成")
 
+
 # ---------- HTML 生成 ----------
 def df_to_html_with_merges(df: pd.DataFrame, title: str, font_size: int = FONT_SIZE_HTML) -> str:
+    """将DataFrame转换为带合并单元格的HTML表格（含国内/国际标题）。
+
+        Args:
+            df: 分组统计DataFrame，应包含attrs（sorted_regions等）。
+            title: 表格标题（如'国内'或'国际'）。
+            font_size: 表格内字体大小。
+
+        Returns:
+            完整的HTML表格字符串。
+        """
     debug_print(f"开始 df_to_html_with_merges for {title}")
 
+    # ---- 新增预处理：将可能为NaN的字符串列转为空字符串，防止死循环 ----
     df = df.copy()
     for col in ['平台类别', '产品系列', '产品型号', '定制原因']:
         if col in df.columns:
             df[col] = df[col].fillna('').astype(str)
+    # ----------------------------------------------------------------
+
 
     rows = df.to_dict('records')
     if not rows:
@@ -590,6 +823,7 @@ def df_to_html_with_merges(df: pd.DataFrame, title: str, font_size: int = FONT_S
             i += 1
             continue
 
+        # 明细行
         curr_plat = row['平台类别']
         start_i = i
         while i < total_rows and row_types[i] == 'detail' and rows[i]['平台类别'] == curr_plat:
@@ -684,16 +918,22 @@ def df_to_html_with_merges(df: pd.DataFrame, title: str, font_size: int = FONT_S
     debug_print(f"df_to_html_with_merges for {title} 完成")
     return html
 
+
 # ========== 工具函数 ==========
 def get_download_folder() -> str:
+    """获取当前用户的下载目录路径"""
     if os.name == 'nt':
         return os.path.join(os.path.expanduser('~'), 'Downloads')
     else:
         return os.path.join(os.path.expanduser('~'), 'Downloads')
 
-def rebuild_df_from_excel(excel_path: str, sheet_name: str) -> pd.DataFrame:
-    debug_print(f"开始 rebuild_df_from_excel: {excel_path}, sheet={sheet_name}")
 
+def rebuild_df_from_excel_bk(excel_path: str, sheet_name: str) -> pd.DataFrame:
+    """
+    从已生成的分组统计 Excel 中读取数据，结合元数据 Sheet 重建 DataFrame（含 attrs）。
+    注意：元数据 Sheet 被隐藏，但读取时不受影响。
+    """
+    debug_print(f"开始 rebuild_df_from_excel: {excel_path}, sheet={sheet_name}")
     meta_df = pd.read_excel(excel_path, sheet_name='元数据', header=None, index_col=0)
     if sheet_name == '国内':
         regions_key = 'sorted_regions_dom'
@@ -714,28 +954,22 @@ def rebuild_df_from_excel(excel_path: str, sheet_name: str) -> pd.DataFrame:
     num_cols = 8 + 3 * len(sorted_regions) + 1
     df_data = df_data.iloc[:, :num_cols]
 
-    header_row = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, nrows=1).iloc[0]
-    base_cols_from_excel = [str(header_row[i]) for i in range(8)]
-
+    std_col = '标准化'
+    cfg_col = '配置化'
+    cus_col = '定制化'
+    base_cols = ['平台类别', '产品系列', '产品型号', '面积汇总', std_col, cfg_col, cus_col, '定制原因']
     region_cols = []
     for region in sorted_regions:
         for cat in ['标准化', '配置化', '定制化']:
             region_cols.append(f"{region}_{cat}")
-    final_cols = base_cols_from_excel + region_cols + ['总计']
+    final_cols = base_cols + region_cols + ['总计']
 
     df_data.columns = final_cols
-
-    for col in ['平台类别', '产品系列', '产品型号']:
-        if col in df_data.columns:
-            df_data[col] = df_data[col].ffill()
 
     numeric_cols = [c for c in final_cols if c not in ['平台类别', '产品系列', '产品型号', '定制原因']]
     for col in numeric_cols:
         df_data[col] = df_data[col].fillna(0)
 
-    std_col = base_cols_from_excel[4]
-    cfg_col = base_cols_from_excel[5]
-    cus_col = base_cols_from_excel[6]
     df_data['面积汇总'] = df_data[std_col] + df_data[cfg_col] + df_data[cus_col]
 
     df_data.attrs['sorted_regions'] = sorted_regions
@@ -746,6 +980,81 @@ def rebuild_df_from_excel(excel_path: str, sheet_name: str) -> pd.DataFrame:
 
     debug_print(f"rebuild_df_from_excel 完成，行数：{len(df_data)}")
     return df_data
+
+
+def rebuild_df_from_excel(excel_path: str, sheet_name: str) -> pd.DataFrame:
+    """
+    从已生成的分组统计 Excel 中读取数据，结合元数据 Sheet 重建 DataFrame（含 attrs）。
+    直接从 Excel 表头读取百分比列名，不依赖元数据计算。
+    """
+    debug_print(f"开始 rebuild_df_from_excel: {excel_path}, sheet={sheet_name}")
+
+    # 1. 从元数据中读取区域信息（区域列表和区域统计数据）
+    meta_df = pd.read_excel(excel_path, sheet_name='元数据', header=None, index_col=0)
+    if sheet_name == '国内':
+        regions_key = 'sorted_regions_dom'
+        data_key = 'region_data_dom'
+    elif sheet_name == '国际':
+        regions_key = 'sorted_regions_int'
+        data_key = 'region_data_int'
+    else:
+        raise ValueError(f"不支持的 sheet_name: {sheet_name}，仅支持 '国内' 或 '国际'")
+
+    try:
+        sorted_regions = json.loads(meta_df.loc[regions_key, 1])
+        region_data = json.loads(meta_df.loc[data_key, 1])
+    except KeyError as e:
+        raise KeyError(f"元数据中缺少键: {e}，请确认 Excel 是由本工具生成。")
+
+    # 2. 读取 Excel 数据（跳过前两行，即表头行）
+    df_data = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, skiprows=2)
+    num_cols = 8 + 3 * len(sorted_regions) + 1
+    df_data = df_data.iloc[:, :num_cols]
+
+    # 3. 从 Excel 第一行读取前 8 列的列名（含百分比）
+    header_row = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, nrows=1).iloc[0]
+    base_cols_from_excel = [str(header_row[i]) for i in
+                            range(8)]  # 前8列：平台类别、产品系列、产品型号、面积汇总、标准化(XX%)、配置化(XX%)、定制化(XX%)、定制原因
+
+    # 4. 构建完整的列名列表
+    # 前8列使用从 Excel 读取的名称
+    region_cols = []
+    for region in sorted_regions:
+        for cat in ['标准化', '配置化', '定制化']:
+            region_cols.append(f"{region}_{cat}")
+    final_cols = base_cols_from_excel + region_cols + ['总计']
+
+    df_data.columns = final_cols
+
+    # 5. 向前填充合并单元格的空值（修复空值导致排版错乱）
+    for col in ['平台类别', '产品系列', '产品型号']:
+        if col in df_data.columns:
+            df_data[col] = df_data[col].ffill()
+
+    # 6. 数值列填充 0
+    numeric_cols = [c for c in final_cols if
+                    c not in ['平台类别', '产品系列', '产品型号', '定制原因']]
+    for col in numeric_cols:
+        df_data[col] = df_data[col].fillna(0)
+
+    # 7. 确保“面积汇总”列正确（重新计算，保证一致性）
+    # 查找标准化、配置化、定制化三列的实际名称（带百分比）
+    std_col = base_cols_from_excel[4]
+    cfg_col = base_cols_from_excel[5]
+    cus_col = base_cols_from_excel[6]
+    df_data['面积汇总'] = df_data[std_col] + df_data[cfg_col] + df_data[cus_col]
+
+    # 8. 设置 attrs
+    df_data.attrs['sorted_regions'] = sorted_regions
+    df_data.attrs['region_data'] = region_data
+    df_data.attrs['region_area'] = {r: region_data[r]['面积汇总'] for r in sorted_regions}
+    df_data.attrs['region_ratio'] = {r: region_data[r]['占比'] for r in sorted_regions}
+    df_data.attrs['region_rank'] = {r: region_data[r]['排名'] for r in sorted_regions}
+
+    debug_print(f"rebuild_df_from_excel 完成，行数：{len(df_data)}")
+    return df_data
+
+
 
 # ========== GUI 应用程序类 ==========
 class GUIApp:
@@ -766,18 +1075,15 @@ class GUIApp:
         self.btn_add_data = None
         self.btn_select_excel = None
 
+        # 用于保存转换过程中读取的DataFrame（跨线程传递）
         self._converted_df_dom = None
         self._converted_df_int = None
         self._converted_excel_path = None
 
-        self._platform_summary_df = None        # 用于统计生成时的平台汇总数据
-        self._region_summary_df = None          # 用于统计生成时的区域汇总数据
-        self._converted_platform_df = None      # Excel转Html时读取的平台汇总数据
-        self._converted_region_df = None        # Excel转Html时读取的区域汇总数据
-
         self._create_widgets()
 
     def _create_widgets(self) -> None:
+        # 顶部提示区域
         top_frame = tk.Frame(self.master)
         top_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -810,19 +1116,21 @@ class GUIApp:
             "Excel 兼容格式：.xlsx 或 .xls。\n\n"
             "【操作说明】\n"
             " 第一步：先生成Excel格式的统计数据 \n"
-            "   1.1. 点击 '添加数据文件' 按钮选择原始数据 Excel。\n"
-            "   1.2. 点击 '统计' 按钮生成分组统计 Excel 和 HTML 文件（如无定制原因修改需求，该文件可以直接使用），并弹出保存对话框。\n\n"
-            " 第二步：选中修改后的Excel文件（格式不可做调整），将其转成html文件 \n"
-            "   2.1. 对于已修改好的Excel（仅限本工具生成的 Excel 格式）文件，可使用下方的 '选择 Excel 文件' 按钮加载。\n"
-            "   2.2. 点击 'Excel 转 HTML' 按钮将选中的 Excel 文件转换为 HTML。\n\n"
+                "1.1. 点击 '添加数据文件' 按钮选择原始数据 Excel。\n"
+                "1.2. 点击 '统计' 按钮生成分组统计 Excel 和 HTML 文件（如无定制原因修改需求，该文件可以直接使用），并弹出保存对话框。\n\n"
+             " 第二步：选中修改后的Excel文件（格式不可做调整），将其转成html文件 \n"
+                "2.1. 对于已修改好的的Excel（仅限本工具生成的 Excel 格式）文件，可使用下方的 '选择 Excel 文件' 按钮加载。\n"
+                "2.2. 点击 'Excel 转 HTML' 按钮将选中的 Excel 文件转换为 HTML。\n\n"
             " ***重要提醒：统计生成的Excel文件内容可以修改，格式不能调整，否则无法转成Html文件。*** \n"
         )
-        hint_text.insert(tk.END, info)
+        hint_text.insert(tk.END, info, )
         hint_text.config(state=tk.DISABLED)
 
+        # 底部功能区
         bottom_frame = tk.Frame(self.master)
         bottom_frame.pack(fill=tk.X, padx=10, pady=10)
 
+        # ----- 功能区1：统计 -----
         group1 = tk.LabelFrame(bottom_frame, text="第一步：从原始数据统计出分类数据", padx=5, pady=5)
         group1.pack(fill=tk.X, pady=5)
 
@@ -839,6 +1147,8 @@ class GUIApp:
         self.btn_stat = tk.Button(row1, text="生成统计数据", command=self._run_statistics)
         self.btn_stat.pack(side=tk.LEFT, padx=2)
 
+        # ----- 功能区2：Excel 转 HTML -----
+        # ----- 功能区2：Excel 转 HTML -----
         group2 = tk.LabelFrame(bottom_frame, text="第二步：将修改后的Excel 转 HTML", padx=5, pady=5)
         group2.pack(fill=tk.X, pady=5)
 
@@ -849,17 +1159,19 @@ class GUIApp:
         entry_excel = tk.Entry(row2, textvariable=self.excel_file_path, width=40, state='readonly')
         entry_excel.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
+        # 将两个按钮放入独立的Frame，并靠右放置，避免被输入框挤压
         btn_frame = tk.Frame(row2)
         btn_frame.pack(side=tk.RIGHT, padx=5)
 
-        self.btn_select_excel = tk.Button(btn_frame, text="选择 Excel 文件", width=10,
+        self.btn_select_excel = tk.Button(btn_frame, text="选择 Excel 文件", width= 10,
                                           command=self._select_excel_file)
         self.btn_select_excel.pack(side=tk.LEFT, padx=2)
 
-        self.btn_convert = tk.Button(btn_frame, text="Excel 转 HTML", width=15,
+        self.btn_convert = tk.Button(btn_frame, text="Excel 转 HTML", width= 15,
                                      command=self._convert_excel_to_html)
         self.btn_convert.pack(side=tk.LEFT, padx=2, ipadx=10)
 
+        # 状态栏
         status_bar = tk.Label(self.master, textvariable=self.status_var, bd=1, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -893,7 +1205,7 @@ class GUIApp:
             try:
                 self._do_statistics(data_path)
             except Exception as e:
-                self.master.after(0, lambda err=e: self._show_error(f"统计失败：{e}"))
+                self.master.after(0, lambda: self._show_error(f"统计失败：{e}"))
             finally:
                 self.master.after(0, self._finish_task)
 
@@ -945,365 +1257,12 @@ class GUIApp:
             self.master.after(0, lambda: self._show_success(f"统计完成！\nExcel：{file_path}\nHTML：{html_path}"))
             self.master.after(0, lambda: webbrowser.open(html_path))
         except Exception as e:
-            self.master.after(0, lambda err=e: self._show_error(f"读取数据失败：{e}"))
+            self.master.after(0, lambda: self._show_error(f"保存失败：{e}"))
         finally:
             self.master.after(0, self._finish_task)
 
-    # -------------------- 新增方法：提取平台汇总数据 --------------------
-    def _extract_platform_data(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
-        """
-        从单个DataFrame中提取平台级别的三大分类面积汇总。
-        Args:
-            df: 由 process_region_data 生成的DataFrame
-        Returns:
-            DataFrame包含列：平台类别, 标准化面积, 配置化面积, 定制化面积
-            若没有明细数据则返回None
-        """
-        if df is None or df.empty:
-            return None
-        # 获取三大分类列（索引4,5,6）
-        std_col = df.columns[4]
-        cfg_col = df.columns[5]
-        cus_col = df.columns[6]
-        # 过滤明细行（排除汇总行和总计行）
-        mask = (df['平台类别'].notna()) & (~df['平台类别'].astype(str).str.endswith('汇总')) & (df['平台类别'] != '总计') & (df['平台类别'] != '')
-        df_detail = df.loc[mask, ['平台类别', std_col, cfg_col, cus_col]].copy()
-        if df_detail.empty:
-            return None
-        # 转为数值
-        df_detail[std_col] = pd.to_numeric(df_detail[std_col], errors='coerce').fillna(0)
-        df_detail[cfg_col] = pd.to_numeric(df_detail[cfg_col], errors='coerce').fillna(0)
-        df_detail[cus_col] = pd.to_numeric(df_detail[cus_col], errors='coerce').fillna(0)
-        # 按平台汇总
-        grouped = df_detail.groupby('平台类别', as_index=False).agg({
-            std_col: 'sum',
-            cfg_col: 'sum',
-            cus_col: 'sum'
-        })
-        grouped.rename(columns={std_col: '标准化面积', cfg_col: '配置化面积', cus_col: '定制化面积'}, inplace=True)
-        return grouped
-
-    def _add_platform_summary_sheet(self, writer: pd.ExcelWriter, df_dom: Optional[pd.DataFrame], df_int: Optional[pd.DataFrame]) -> None:
-        """
-        生成“平台占比情况”Sheet并写入Excel，应用样式。
-        Args:
-            writer: pd.ExcelWriter对象
-            df_dom: 国内数据DataFrame
-            df_int: 国际数据DataFrame
-        """
-        # 提取国内、国际的平台汇总
-        dom_plat = self._extract_platform_data(df_dom)
-        int_plat = self._extract_platform_data(df_int)
-
-        # 合并（如果两者都存在）
-        if dom_plat is not None and int_plat is not None:
-            # 合并并相加
-            merged = pd.concat([dom_plat, int_plat], ignore_index=True)
-            platform_df = merged.groupby('平台类别', as_index=False).sum()
-        elif dom_plat is not None:
-            platform_df = dom_plat.copy()
-        elif int_plat is not None:
-            platform_df = int_plat.copy()
-        else:
-            # 无数据，不创建sheet
-            return
-
-        # 计算派生列
-        platform_df['标品面积'] = platform_df['标准化面积'] + platform_df['配置化面积']
-        platform_df['总计'] = platform_df['标准化面积'] + platform_df['配置化面积'] + platform_df['定制化面积']
-
-        # 计算各占比（保留百分比格式，乘以100后保留2位小数）
-        platform_df['标准化占比'] = (platform_df['标准化面积'] / platform_df['总计'] * 100).round(2)
-        platform_df['配置占比'] = (platform_df['配置化面积'] / platform_df['总计'] * 100).round(2)
-        platform_df['标品占比'] = (platform_df['标品面积'] / platform_df['总计'] * 100).round(2)
-        platform_df['定制化占比'] = (platform_df['定制化面积'] / platform_df['总计'] * 100).round(2)
-
-        # 计算平台占比（当前平台总计 / 所有平台总计之和）
-        total_all = platform_df['总计'].sum()
-        platform_df['平台占比'] = (platform_df['总计'] / total_all * 100).round(2)
-
-        # 按总计降序排序
-        platform_df = platform_df.sort_values('总计', ascending=False).reset_index(drop=True)
-
-        # 添加总计行
-        total_row = {
-            '平台类别': '总计',
-            '标准化面积': platform_df['标准化面积'].sum(),
-            '配置化面积': platform_df['配置化面积'].sum(),
-            '定制化面积': platform_df['定制化面积'].sum(),
-            '标品面积': platform_df['标品面积'].sum(),
-            '总计': platform_df['总计'].sum(),
-        }
-        # 总计行的占比：各面积除以总计行的总计
-        total_sum = total_row['总计']
-        if total_sum > 0:
-            total_row['标准化占比'] = (total_row['标准化面积'] / total_sum * 100).round(2)
-            total_row['配置占比'] = (total_row['配置化面积'] / total_sum * 100).round(2)
-            total_row['标品占比'] = (total_row['标品面积'] / total_sum * 100).round(2)
-            total_row['定制化占比'] = (total_row['定制化面积'] / total_sum * 100).round(2)
-            total_row['平台占比'] = 100.0  # 总计行的平台占比为100%
-        else:
-            total_row['标准化占比'] = 0.0
-            total_row['配置占比'] = 0.0
-            total_row['标品占比'] = 0.0
-            total_row['定制化占比'] = 0.0
-            total_row['平台占比'] = 100.0
-
-        # 将总计行追加到DataFrame
-        platform_df = pd.concat([platform_df, pd.DataFrame([total_row])], ignore_index=True)
-
-        # 定义列顺序
-        col_order = ['平台类别', '标准化面积', '标准化占比', '配置化面积', '配置占比', '标品面积', '标品占比', '定制化面积', '定制化占比', '总计', '平台占比']
-        platform_df = platform_df[col_order]
-
-        # 获取Sheet对象（已由调用方创建）
-        workbook = writer.book
-        sheet_name = '平台占比情况'
-        if sheet_name in workbook.sheetnames:
-            sheet = workbook[sheet_name]
-        else:
-            sheet = workbook.create_sheet(sheet_name, 0)  # 放在最前面
-
-        # 写入数据前，将数值列中的 0 替换为 None（使 Excel 显示为空）
-        # 除第一列（平台类别）外，其余列均为数值列
-        numeric_cols = platform_df.columns[1:]  # 从第二列开始
-        for col in numeric_cols:
-            platform_df[col] = platform_df[col].replace(0, None)
-
-        # 写入数据（从第3行开始，前两行留给表头）
-        for r_idx, row in enumerate(platform_df.values, start=2):
-            for c_idx, value in enumerate(row, start=1):
-                sheet.cell(row=r_idx, column=c_idx, value=value)
-
-        # 写入表头（第1行合并？但此表不需要合并，只写一行标题）
-        headers = col_order
-        for c_idx, header in enumerate(headers, start=1):
-            cell = sheet.cell(row=1, column=c_idx, value=header)
-            cell.font = Font(bold=True, color='FFFFFF')
-            cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
-            cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-
-        # 设置数据区域样式（边框、居中、数字格式）
-        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-        for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=len(col_order)):
-            for cell in row:
-                # 平台类别列（第1列）左对齐，其余右对齐
-                if cell.column == 1:
-                    cell.alignment = Alignment(horizontal='left', vertical='center')
-                else:
-                    cell.alignment = Alignment(horizontal='right', vertical='center')
-                cell.border = thin_border
-                # 数字格式保持不变（沿用原有逻辑）
-                header_cell = sheet.cell(row=1, column=cell.column)
-                if header_cell.value and '占比' in header_cell.value:
-                    cell.number_format = '0.00"%"'
-                else:
-                    cell.number_format = '#,##0'
-        # 设置列宽
-        col_widths = {'平台类别': 18, '标准化面积': 14, '标准化占比': 14, '配置化面积': 14, '配置占比': 14,
-                      '标品面积': 14, '标品占比': 14, '定制化面积': 14, '定制化占比': 14, '总计': 14, '平台占比': 14}
-        for c_idx, col_name in enumerate(col_order, start=1):
-            sheet.column_dimensions[get_column_letter(c_idx)].width = col_widths.get(col_name, 14)
-
-        # 总计行加粗、浅蓝色背景
-        last_row = sheet.max_row
-        for col in range(1, len(col_order)+1):
-            cell = sheet.cell(row=last_row, column=col)
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-
-        self._platform_summary_df = platform_df     # 保存平台汇总数据
-        debug_print("平台占比情况 Sheet 生成完成")
-    # -------------------- 新增结束 --------------------
-
-    def _add_region_summary_sheet(self, writer: pd.ExcelWriter, df_dom: Optional[pd.DataFrame], df_int: Optional[pd.DataFrame]) -> None:
-        """
-        生成“国内国际1、定制情况”Sheet，统计国内、国际及总计的各类面积和占比。
-        列：区域、标配、标配占比、配置化、配置化占比、定制化、定制化占比、总计、签单占比
-        标配 = 标准化面积（即主推类型为TOP/TOP+的面积）
-        Args:
-            writer: pd.ExcelWriter对象
-            df_dom: 国内数据DataFrame
-            df_int: 国际数据DataFrame
-        """
-        # 辅助函数：从DataFrame中提取汇总数据
-        def extract_region_totals(df: pd.DataFrame) -> Dict[str, float]:
-            if df is None or df.empty:
-                return {'标准化': 0, '配置化': 0, '定制化': 0, '总计': 0}
-            # 过滤明细行（排除汇总行和总计行）
-            mask = (df['平台类别'].notna()) & (~df['平台类别'].astype(str).str.endswith('汇总')) & (df['平台类别'] != '总计') & (df['平台类别'] != '')
-            df_detail = df.loc[mask].copy()
-            if df_detail.empty:
-                return {'标准化': 0, '配置化': 0, '定制化': 0, '总计': 0}
-            # 三大分类列固定索引4,5,6
-            std_col = df.columns[4]
-            cfg_col = df.columns[5]
-            cus_col = df.columns[6]
-            total_std = pd.to_numeric(df_detail[std_col], errors='coerce').sum()
-            total_cfg = pd.to_numeric(df_detail[cfg_col], errors='coerce').sum()
-            total_cus = pd.to_numeric(df_detail[cus_col], errors='coerce').sum()
-            total = total_std + total_cfg + total_cus
-            return {'标准化': total_std, '配置化': total_cfg, '定制化': total_cus, '总计': total}
-
-        dom_data = extract_region_totals(df_dom)
-        int_data = extract_region_totals(df_int)
-
-        # 构建行数据
-        rows = []
-        # 国内
-        if dom_data['总计'] > 0:
-            total_dom = dom_data['总计']
-            rows.append({
-                '区域': '国内',
-                '标配': dom_data['标准化'],          # 修改点：使用标准化面积
-                '标配占比': dom_data['标准化'] / total_dom * 100 if total_dom else 0,
-                '配置化': dom_data['配置化'],
-                '配置化占比': dom_data['配置化'] / total_dom * 100 if total_dom else 0,
-                '定制化': dom_data['定制化'],
-                '定制化占比': dom_data['定制化'] / total_dom * 100 if total_dom else 0,
-                '总计': total_dom,
-                '签单占比': 0  # 后续统一计算
-            })
-        # 国际
-        if int_data['总计'] > 0:
-            total_int = int_data['总计']
-            rows.append({
-                '区域': '国际',
-                '标配': int_data['标准化'],          # 修改点：使用标准化面积
-                '标配占比': int_data['标准化'] / total_int * 100 if total_int else 0,
-                '配置化': int_data['配置化'],
-                '配置化占比': int_data['配置化'] / total_int * 100 if total_int else 0,
-                '定制化': int_data['定制化'],
-                '定制化占比': int_data['定制化'] / total_int * 100 if total_int else 0,
-                '总计': total_int,
-                '签单占比': 0
-            })
-        # 总计行
-        total_all = dom_data['总计'] + int_data['总计']
-        if total_all > 0:
-            total_std = dom_data['标准化'] + int_data['标准化']
-            total_cfg = dom_data['配置化'] + int_data['配置化']
-            total_cus = dom_data['定制化'] + int_data['定制化']
-            rows.append({
-                '区域': '总计',
-                '标配': total_std,                  # 修改点：总标准化面积
-                '标配占比': total_std / total_all * 100 if total_all else 0,
-                '配置化': total_cfg,
-                '配置化占比': total_cfg / total_all * 100 if total_all else 0,
-                '定制化': total_cus,
-                '定制化占比': total_cus / total_all * 100 if total_all else 0,
-                '总计': total_all,
-                '签单占比': 100.0
-            })
-
-        if not rows:
-            return
-
-        df_summary = pd.DataFrame(rows)
-
-        # 重新计算签单占比（非总计行）
-        total_all = df_summary[df_summary['区域'] != '总计']['总计'].sum() if not df_summary[df_summary['区域'] != '总计'].empty else 0
-        if total_all > 0:
-            mask_non_total = df_summary['区域'] != '总计'
-            df_summary.loc[mask_non_total, '签单占比'] = (df_summary.loc[mask_non_total, '总计'] / total_all * 100).round(2)
-        df_summary.loc[df_summary['区域'] == '总计', '签单占比'] = 100.0
-
-        # 数值四舍五入
-        numeric_cols = ['标配', '配置化', '定制化', '总计']
-        for col in numeric_cols:
-            df_summary[col] = df_summary[col].round(0).astype(int)
-        percent_cols = ['标配占比', '配置化占比', '定制化占比', '签单占比']
-        for col in percent_cols:
-            df_summary[col] = df_summary[col].round(2)
-
-        # 写入Excel
-        workbook = writer.book
-        sheet_name = '国内国际定制情况'
-        if sheet_name in workbook.sheetnames:
-            workbook.remove(workbook[sheet_name])
-        sheet = workbook.create_sheet(sheet_name, 1)  # 索引1，紧贴平台占比之后
-
-        headers = ['区域', '标配', '标配占比', '配置化', '配置化占比', '定制化', '定制化占比', '总计', '签单占比']  # 修改列名
-        # 表头
-        for c_idx, header in enumerate(headers, start=1):
-            cell = sheet.cell(row=1, column=c_idx, value=header)
-            cell.font = Font(bold=True, color='FFFFFF')
-            cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
-            cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-
-        # 写入数据前，将数值列中的 0 替换为 None
-        numeric_cols = df_summary.columns[1:]  # 除“区域”外
-        for col in numeric_cols:
-            df_summary[col] = df_summary[col].replace(0, None)
-
-        # 数据
-        for r_idx, row in enumerate(df_summary.values, start=2):
-            for c_idx, value in enumerate(row, start=1):
-                sheet.cell(row=r_idx, column=c_idx, value=value)
-
-        # 样式
-        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-        for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row, min_col=1, max_col=len(headers)):
-            for cell in row:
-                if cell.column == 1:
-                    cell.alignment = Alignment(horizontal='left', vertical='center')
-                else:
-                    cell.alignment = Alignment(horizontal='right', vertical='center')
-                cell.border = thin_border
-                header_cell = sheet.cell(row=1, column=cell.column)
-                if header_cell.value and '占比' in header_cell.value:
-                    cell.number_format = '0.00"%"'
-                else:
-                    cell.number_format = '#,##0'
-
-        # 列宽
-        col_widths = {'区域': 16, '标配': 12, '标配占比': 12, '配置化': 12, '配置化占比': 12,
-                      '定制化': 12, '定制化占比': 12, '总计': 12, '签单占比': 12}
-        for c_idx, col_name in enumerate(headers, start=1):
-            sheet.column_dimensions[get_column_letter(c_idx)].width = col_widths.get(col_name, 12)
-
-        # 总计行加粗浅蓝
-        last_row = sheet.max_row
-        for col in range(1, len(headers)+1):
-            cell = sheet.cell(row=last_row, column=col)
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-
-
-        self._region_summary_df = df_summary        # 保存区域汇总数据
-        debug_print("国内国际定制情况 Sheet 生成完成")
-
-    # 修改 _save_excel 函数（新增调用平台汇总Sheet）
     def _save_excel(self, file_path: str, df_dom: Optional[pd.DataFrame], df_int: Optional[pd.DataFrame]) -> None:
-        """
-        将统计结果保存为 Excel，包含三个Sheet：
-        1. 平台占比情况（新增，放在最左侧）
-        2. 国内（如有）
-        3. 国际（如有）
-        以及隐藏的元数据Sheet。
-        """
         with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
-            # ----- 新增：添加平台占比情况Sheet（放在最前面） -----
-            if df_dom is not None or df_int is not None:
-                # 先删除可能同名的旧Sheet（避免冲突）
-                workbook = writer.book
-                if '平台占比情况' in workbook.sheetnames:
-                    std_sheet = workbook['平台占比情况']
-                    workbook.remove(std_sheet)
-                # 创建新Sheet（索引0放在最前）
-                workbook.create_sheet('平台占比情况', 0)
-                # 调用生成函数
-                self._add_platform_summary_sheet(writer, df_dom, df_int)
-            # ----- 新增结束 -----
-
-            # ----- 新增：添加国内国际汇总Sheet（放在平台占比之后） -----
-            if df_dom is not None or df_int is not None:
-                self._add_region_summary_sheet(writer, df_dom, df_int)
-            # ----- 新增结束 -----
-
-            # 原有写入国内和国际（保持不变）
             if df_dom is not None:
                 df_dom_excel = df_dom.copy()
                 numeric_cols = [c for c in df_dom_excel.columns if c not in ['平台类别', '产品系列', '产品型号', '定制原因']]
@@ -1317,7 +1276,6 @@ class GUIApp:
                     df_int_excel[col] = df_int_excel[col].replace(0, None)
                 df_int_excel.to_excel(writer, sheet_name='国际', index=False, header=False, startrow=2)
 
-            # 元数据（不变）
             meta_data = {}
             if df_dom is not None:
                 meta_data['sorted_regions_dom'] = df_dom.attrs['sorted_regions']
@@ -1337,7 +1295,6 @@ class GUIApp:
                 meta_sheet = workbook['元数据']
                 meta_sheet.sheet_state = 'hidden'
 
-            # 应用样式到国内和国际（不变）
             for sheet_name in ['国内', '国际']:
                 if sheet_name not in workbook.sheetnames:
                     continue
@@ -1355,77 +1312,10 @@ class GUIApp:
                 apply_merges(sheet, start_row=3, sorted_regions=sorted_regions,
                              region_data=region_data, col_names=col_names)
 
-            # 注意：平台占比情况Sheet已在添加时应用样式，无需再调用apply_merges
-
-    def _df_to_simple_html(self, df: pd.DataFrame, title: str,
-                           left_align_cols: List[str] = None) -> str:
-        """
-        将单行表头的DataFrame转换为HTML表格，样式与Excel一致。
-        Args:
-            df: 数据框
-            title: 表格标题
-            left_align_cols: 需要左对齐的列名列表，默认为第一列
-        Returns:
-            HTML字符串
-        """
-        if df is None or df.empty:
-            return ""
-        if left_align_cols is None:
-            left_align_cols = [df.columns[0]]
-
-        headers = df.columns.tolist()
-        # 表头
-        thead = '<thead><tr>' + ''.join(f'<th>{h}</th>' for h in headers) + '</tr></thead>'
-
-        # 表体
-        tbody_rows = []
-        total_indices = df[df.iloc[:, 0] == '总计'].index
-        for idx, row in df.iterrows():
-            tr_class = 'total' if idx in total_indices else ''
-            tr = f'<tr class="{tr_class}">'
-            for col in headers:
-                val = row[col]
-                # 格式化数值
-                if pd.isna(val):
-                    display = ''
-                elif isinstance(val, (int, float)) and val == 0:
-                    display = ''        # 0值显示为空
-                elif '占比' in col or col.endswith('占比'):
-                    display = f"{val:.2f}%" if isinstance(val, (int, float)) else str(val)
-                else:
-                    display = f"{int(val):,}" if isinstance(val, (int, float)) else str(val)
-                align = 'left' if col in left_align_cols else 'right'
-                tr += f'<td style="text-align: {align};">{display}</td>'
-            tr += '</tr>'
-            tbody_rows.append(tr)
-        tbody = '<tbody>' + ''.join(tbody_rows) + '</tbody>'
-
-        return f"""
-        <div class="table-container">
-            <h2>{title}</h2>
-            <table style="font-size: {FONT_SIZE_HTML}px; border-collapse: collapse; width: 100%;">
-                {thead}
-                {tbody}
-            </table>
-        </div>
-        """
-
-    def _generate_html(self, html_path: str, df_dom: Optional[pd.DataFrame],
-                       df_int: Optional[pd.DataFrame]) -> None:
+    def _generate_html(self, html_path: str, df_dom: Optional[pd.DataFrame], df_int: Optional[pd.DataFrame]) -> None:
         debug_print("生成HTML内容")
-        # 优先使用转换时读取的数据，否则使用统计生成时保存的数据
-        platform_df = self._converted_platform_df if self._converted_platform_df is not None else self._platform_summary_df
-        region_df = self._converted_region_df if self._converted_region_df is not None else self._region_summary_df
-
-        # 生成各表格HTML
-        platform_html = self._df_to_simple_html(platform_df, "平台占比情况",
-                                                left_align_cols=['平台类别'])
-        region_html = self._df_to_simple_html(region_df, "国内国际定制情况",
-                                              left_align_cols=['区域'])
-        dom_html = df_to_html_with_merges(df_dom, "国内",
-                                          font_size=FONT_SIZE_HTML) if df_dom is not None else ""
-        int_html = df_to_html_with_merges(df_int, "国际",
-                                          font_size=FONT_SIZE_HTML) if df_int is not None else ""
+        dom_html = df_to_html_with_merges(df_dom, "国内", font_size=FONT_SIZE_HTML) if df_dom is not None else ""
+        int_html = df_to_html_with_merges(df_int, "国际", font_size=FONT_SIZE_HTML) if df_int is not None else ""
 
         html_content = f"""
         <!DOCTYPE html>
@@ -1438,16 +1328,14 @@ class GUIApp:
                 h2 {{ text-align: center; color: #333; }}
                 .table-container {{ margin-bottom: 40px; overflow-x: auto; }}
                 table {{ border-collapse: collapse; width: 100%; margin: 0 auto; }}
-                th, td {{ border: 1px solid #000; padding: 6px 12px; }}
-                th {{ background-color: #4A90D9; color: white; font-weight: bold; text-align: center; }}
-                .total td {{ background-color: #D9E1F2; font-weight: bold; }}
+                th, td {{ border: 1px solid #000; padding: 6px 12px; text-align: center; }}
+                th {{ background-color: #4A90D9; color: white; font-weight: bold; }}
                 .top-total td {{ background-color: #D9E1F2; font-weight: bold; }}
+                .total td {{ background-color: #D9E1F2; font-weight: bold; }}
                 .subtotal td {{ background-color: #E2EFDA; font-weight: bold; }}
             </style>
         </head>
         <body>
-            {platform_html}
-            {region_html}
             {dom_html}
             {int_html}
         </body>
@@ -1456,7 +1344,6 @@ class GUIApp:
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         debug_print(f"HTML保存完成: {html_path}")
-
 
     def _convert_excel_to_html(self) -> None:
         excel_path = self.excel_file_path.get()
@@ -1482,7 +1369,7 @@ class GUIApp:
             try:
                 self._do_convert_read(excel_path)
             except Exception as e:
-                self.master.after(0, lambda err=e: self._show_error(f"读取数据失败：{e}"))
+                self.master.after(0, lambda: self._show_error(f"读取数据失败：{e}"))
                 self.master.after(0, self._finish_task)
 
         threading.Thread(target=read_task, daemon=True).start()
@@ -1491,41 +1378,24 @@ class GUIApp:
         debug_print(f"开始读取Excel: {excel_path}")
         df_dom = None
         df_int = None
-        platform_df = None
-        region_df = None
         with pd.ExcelFile(excel_path) as xls:
             if '元数据' not in xls.sheet_names:
                 raise ValueError("该 Excel 不是由本工具生成（缺少元数据 Sheet）。")
-            # 读取原有国内/国际
             if '国内' in xls.sheet_names:
                 df_dom = rebuild_df_from_excel(excel_path, '国内')
             if '国际' in xls.sheet_names:
                 df_int = rebuild_df_from_excel(excel_path, '国际')
-            # 读取新增的两个Sheet
-            # 读取新增的两个Sheet
-            if '平台占比情况' in xls.sheet_names:
-                platform_df = pd.read_excel(excel_path, sheet_name='平台占比情况', header=0)
-                # 确保数值列转换（跳过第一列，保留平台类别文本）
-                for col in platform_df.columns[1:]:  # 从第二列开始
-                    platform_df[col] = pd.to_numeric(platform_df[col], errors='coerce')
-            if '国内国际定制情况' in xls.sheet_names:
-                region_df = pd.read_excel(excel_path, sheet_name='国内国际定制情况', header=0)
-                # 跳过第一列（区域列）
-                for col in region_df.columns[1:]:
-                    region_df[col] = pd.to_numeric(region_df[col], errors='coerce')
 
         if df_dom is None and df_int is None:
             raise ValueError("Excel 中既无 '国内' 也无 '国际' 数据。")
 
         self._converted_df_dom = df_dom
         self._converted_df_int = df_int
-        self._converted_platform_df = platform_df
-        self._converted_region_df = region_df
         debug_print("数据读取完成，准备弹出保存对话框")
         self.master.after(0, self._show_convert_save_dialog)
 
-
     def _show_convert_save_dialog(self) -> None:
+        """主线程：弹出保存对话框并启动后台生成HTML"""
         excel_path = self._converted_excel_path
         df_dom = self._converted_df_dom
         df_int = self._converted_df_int
@@ -1544,6 +1414,7 @@ class GUIApp:
             self._finish_task()
             return
 
+        # 在后台线程中生成HTML并保存
         self.status_var.set("正在生成HTML...")
         debug_print(f"准备后台生成HTML: {html_path}")
 
@@ -1553,7 +1424,7 @@ class GUIApp:
                 self.master.after(0, lambda: self._show_success(f"HTML 已保存至：{html_path}"))
                 self.master.after(0, lambda: webbrowser.open(html_path))
             except Exception as e:
-                self.master.after(0, lambda err=e: self._show_error(f"保存HTML失败：{e}"))
+                self.master.after(0, lambda: self._show_error(f"保存HTML失败：{e}"))
             finally:
                 self.master.after(0, self._finish_task)
 
@@ -1584,11 +1455,13 @@ class GUIApp:
         messagebox.showinfo("成功", msg)
         self.status_var.set("完成")
 
+
 # ========== 主入口 ==========
 def main() -> None:
     root = tk.Tk()
     app = GUIApp(root)
     root.mainloop()
+
 
 if __name__ == '__main__':
     main()
