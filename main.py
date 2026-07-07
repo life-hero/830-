@@ -582,7 +582,7 @@ def apply_merges_bk(
             rank = info.get('排名', 0)
             area = info.get('面积汇总', 0)
             ratio = info.get('占比', 0)
-            display_text = f"TOP{rank:.0f} {region}\n{area:.2f}㎡ ({ratio:.1f}%)"
+            display_text = f"TOP{rank:.0f} {region} - {area:.2f}㎡ ({ratio:.1f}%)"
             cell = sheet.cell(row=1, column=col_start)
             cell.value = display_text
             cell.font = Font(bold=True, color='FFFFFF')
@@ -796,305 +796,227 @@ def _safe_set_cell_style(cell, font=None, fill=None, alignment=None, border=None
         return False
 
 
+
 def apply_merges(
-        sheet,
-        start_row: int = 3,
-        sorted_regions: List[str] = None,
-        region_data: Dict[str, Any] = None,
-        col_names: List[str] = None
+    sheet,
+    start_row: int = 3,
+    sorted_regions: List[str] = None,
+    region_data: Dict[str, Any] = None,
+    col_names: List[str] = None
 ) -> None:
-    """
-    应用Excel合并和样式。
-    """
+    """应用Excel合并和样式 - 适配12列基础结构"""
     debug_print("开始 apply_merges")
+    max_row = sheet.max_row
+    max_col = sheet.max_column
+    if max_row < start_row:
+        return
 
-    try:
-        max_row = sheet.max_row
-        max_col = sheet.max_column
-        if max_row < start_row:
-            return
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
 
-        thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
+    # 【修复】基础列名：12列（与process_region_data输出一致）
+    if col_names is None:
+        col_names = [sheet.cell(row=1, column=i).value for i in range(1, 13)]
+        if not any(col_names) or col_names[0] is None:
+            col_names = [
+                '平台类别', '产品系列', '产品型号',
+                '订单号', '毛利情况(%)', '低毛利原因',
+                '面积汇总', '标准化', '配置化', '配置化理由', '定制化', '定制原因'
+            ]
 
-        # 基础列名（前14列包含新增列）
-        if col_names is None:
-            col_names = [sheet.cell(row=1, column=i).value for i in range(1, 15)]
-            if not any(col_names):
-                col_names = [
-                    '平台类别', '产品系列', '产品型号', '面积汇总',
-                    '标准化', '配置化', '定制化', '定制原因',
-                    '订单号', '毛利情况', '配置化理由',
-                    '低毛利订单号', '低毛利值', '低毛利原因'
-                ]
+    # ---------- 1. 设置表头（前12列合并两行） ----------
+    for col_idx, name in enumerate(col_names[:12], start=1):
+        sheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
+        cell = sheet.cell(row=1, column=col_idx)
+        cell.value = name
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
 
-        # ---------- 1. 设置表头（前14列合并两行） ----------
-        for col_idx, name in enumerate(col_names[:14], start=1):
-            try:
-                sheet.merge_cells(start_row=1, start_column=col_idx, end_row=2, end_column=col_idx)
-                cell = sheet.cell(row=1, column=col_idx)
-                cell.value = name
-                _safe_set_cell_style(
-                    cell,
-                    font=Font(bold=True, color='FFFFFF'),
-                    fill=PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid"),
-                    alignment=Alignment(horizontal='center', vertical='center'),
-                    border=thin_border
-                )
-            except Exception as e:
-                debug_print(f"设置表头列 {col_idx} 时出错: {e}")
-                continue
+    # ---------- 2. 区域列（第13列开始） ----------
+    if sorted_regions and region_data:
+        start_col = 13  # 12列基础列 + 1
+        total_col_index = start_col + len(sorted_regions) * 3
 
-        # ---------- 2. 区域列 ----------
-        if sorted_regions and region_data:
-            start_col = 15
-            total_col_index = start_col + len(sorted_regions) * 3
+        for i, region in enumerate(sorted_regions):
+            col_start = start_col + i * 3
+            col_end = col_start + 2
+            sheet.merge_cells(start_row=1, start_column=col_start, end_row=1, end_column=col_end)
+            info = region_data.get(region, {})
+            rank = info.get('排名', 0)
+            area = info.get('面积汇总', 0)
+            ratio = info.get('占比', 0)
+            display_text = f"TOP{rank:.0f} {region} - {area:.2f}㎡ ({ratio:.1f}%)"
+            cell = sheet.cell(row=1, column=col_start)
+            cell.value = display_text
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            cell.border = thin_border
 
-            for i, region in enumerate(sorted_regions):
-                col_start = start_col + i * 3
-                col_end = col_start + 2
-                try:
-                    sheet.merge_cells(start_row=1, start_column=col_start, end_row=1,
-                                      end_column=col_end)
-                    info = region_data.get(region, {})
-                    rank = info.get('排名', 0)
-                    area = info.get('面积汇总', 0)
-                    ratio = info.get('占比', 0)
-                    display_text = f"TOP{rank:.0f} {region}\n{area:.2f}㎡ ({ratio:.1f}%)"
-                    cell = sheet.cell(row=1, column=col_start)
-                    cell.value = display_text
-                    _safe_set_cell_style(
-                        cell,
-                        font=Font(bold=True, color='FFFFFF'),
-                        fill=PatternFill(start_color="4A90D9", end_color="4A90D9",
-                                         fill_type="solid"),
-                        alignment=Alignment(horizontal='center', vertical='center', wrap_text=True),
-                        border=thin_border
-                    )
+            for j, sub in enumerate(['标准化', '配置化', '定制化']):
+                cell = sheet.cell(row=2, column=col_start + j)
+                cell.value = sub
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = thin_border
 
-                    for j, sub in enumerate(['标准化', '配置化', '定制化']):
-                        cell = sheet.cell(row=2, column=col_start + j)
-                        cell.value = sub
-                        _safe_set_cell_style(
-                            cell,
-                            font=Font(bold=True),
-                            fill=PatternFill(start_color="4A90D9", end_color="4A90D9",
-                                             fill_type="solid"),
-                            alignment=Alignment(horizontal='center', vertical='center'),
-                            border=thin_border
-                        )
-                except Exception as e:
-                    debug_print(f"设置区域列 {region} 时出错: {e}")
+        # 总计列
+        sheet.merge_cells(start_row=1, start_column=total_col_index, end_row=2, end_column=total_col_index)
+        cell = sheet.cell(row=1, column=total_col_index)
+        cell.value = '总计'
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
+
+    # ---------- 3. 设置所有单元格边框和对齐 ----------
+    for row in sheet.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+        for cell in row:
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = thin_border
+
+    # ---------- 4. 总计行样式（第3行） ----------
+    if max_row >= 3:
+        sheet.merge_cells(start_row=3, start_column=1, end_row=3, end_column=3)
+        cell = sheet.cell(row=3, column=1)
+        cell.value = '总计'
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        for col in range(4, max_col + 1):
+            cell = sheet.cell(row=3, column=col)
+            cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+            cell.font = Font(bold=True)
+
+    # ---------- 5. 收集明细行数据 ----------
+    detail_rows = []
+    for r in range(start_row, max_row + 1):
+        plat_val = sheet.cell(row=r, column=1).value
+        if plat_val is None:
+            continue
+        if isinstance(plat_val, str) and (plat_val.endswith('汇总') or plat_val == '总计'):
+            continue
+        if r == 3:
+            continue
+        series_val = sheet.cell(row=r, column=2).value
+        model_val = sheet.cell(row=r, column=3).value
+        detail_rows.append((r, plat_val, series_val, model_val))
+
+    # ---------- 6. 汇总行和总计行样式 ----------
+    for row_idx in range(start_row, max_row + 1):
+        plat_cell = sheet.cell(row=row_idx, column=1)
+        if plat_cell.value and isinstance(plat_cell.value, str):
+            val = plat_cell.value
+            if val.endswith('汇总'):
+                # 获取系列值
+                b_val = sheet.cell(row=row_idx, column=2).value
+                sheet.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx, end_column=3)
+                merged_cell = sheet.cell(row=row_idx, column=2)
+                merged_cell.value = b_val
+                for col in range(1, max_col + 1):
+                    cell = sheet.cell(row=row_idx, column=col)
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+            elif val == '总计':
+                sheet.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=3)
+                merged_cell = sheet.cell(row=row_idx, column=1)
+                merged_cell.value = '总计'
+                merged_cell.alignment = Alignment(horizontal='center', vertical='center')
+                for col in range(1, max_col + 1):
+                    cell = sheet.cell(row=row_idx, column=col)
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    # ---------- 7. 平台类别合并 ----------
+    if detail_rows:
+        platform_groups = defaultdict(list)
+        for r, plat, series, model in detail_rows:
+            platform_groups[plat].append((r, series, model))
+        for plat, rows in platform_groups.items():
+            start_r = rows[0][0]
+            end_r = rows[-1][0]
+            if len(rows) > 1:
+                sheet.merge_cells(start_row=start_r, start_column=1,
+                                  end_row=end_r, end_column=1)
+                merged_cell = sheet.cell(row=start_r, column=1)
+                merged_cell.value = plat
+
+    # ---------- 8. 产品系列合并 ----------
+    if detail_rows:
+        platform_groups = defaultdict(list)
+        for r, plat, series, model in detail_rows:
+            platform_groups[plat].append((r, series, model))
+        for plat, rows in platform_groups.items():
+            idx = 0
+            while idx < len(rows):
+                row_idx, series_val, model_val = rows[idx]
+                if series_val is None:
+                    idx += 1
                     continue
-
-            try:
-                sheet.merge_cells(start_row=1, start_column=total_col_index, end_row=2,
-                                  end_column=total_col_index)
-                cell = sheet.cell(row=1, column=total_col_index)
-                cell.value = '总计'
-                _safe_set_cell_style(
-                    cell,
-                    font=Font(bold=True, color='FFFFFF'),
-                    fill=PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid"),
-                    alignment=Alignment(horizontal='center', vertical='center'),
-                    border=thin_border
-                )
-            except Exception as e:
-                debug_print(f"设置总计列时出错: {e}")
-
-        # ---------- 3. 设置所有单元格边框和对齐 ----------
-        for row in sheet.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-            for cell in row:
-                _safe_set_cell_style(
-                    cell,
-                    alignment=Alignment(horizontal='center', vertical='center'),
-                    border=thin_border
-                )
-
-        # ---------- 4. 总计行样式（第3行） ----------
-        if max_row >= 3:
-            try:
-                sheet.merge_cells(start_row=3, start_column=1, end_row=3, end_column=3)
-                cell = sheet.cell(row=3, column=1)
-                cell.value = '总计'
-                _safe_set_cell_style(
-                    cell,
-                    font=Font(bold=True),
-                    fill=PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid"),
-                    alignment=Alignment(horizontal='center', vertical='center')
-                )
-                for col in range(4, max_col + 1):
-                    cell = sheet.cell(row=3, column=col)
-                    _safe_set_cell_style(
-                        cell,
-                        font=Font(bold=True),
-                        fill=PatternFill(start_color="D9E1F2", end_color="D9E1F2",
-                                         fill_type="solid")
-                    )
-            except Exception as e:
-                debug_print(f"设置总计行样式时出错: {e}")
-
-        # ---------- 5. 收集明细行数据 ----------
-        detail_rows = []
-        for r in range(start_row, max_row + 1):
-            try:
-                plat_val = sheet.cell(row=r, column=1).value
-                if plat_val is None:
-                    continue
-                if isinstance(plat_val, str) and (plat_val.endswith('汇总') or plat_val == '总计'):
-                    continue
-                if r == 3:
-                    continue
-                series_val = sheet.cell(row=r, column=2).value
-                model_val = sheet.cell(row=r, column=3).value
-                detail_rows.append((r, plat_val, series_val, model_val))
-            except Exception as e:
-                debug_print(f"收集行 {r} 数据时出错: {e}")
-                continue
-
-        # ---------- 6. 汇总行和总计行样式 ----------
-        for row_idx in range(start_row, max_row + 1):
-            try:
-                plat_cell = sheet.cell(row=row_idx, column=1)
-                if plat_cell.value and isinstance(plat_cell.value, str):
-                    val = plat_cell.value
-                    if val.endswith('汇总'):
-                        # 先获取值再合并
-                        b_val = sheet.cell(row=row_idx, column=2).value
-                        sheet.merge_cells(start_row=row_idx, start_column=2, end_row=row_idx,
-                                          end_column=3)
-                        # 只有左上角单元格可以赋值
-                        merged_cell = sheet.cell(row=row_idx, column=2)
-                        try:
-                            merged_cell.value = b_val
-                        except (AttributeError, TypeError):
-                            debug_print(f"无法给汇总行 {row_idx} 的合并单元格赋值")
-                        for col in range(1, max_col + 1):
-                            cell = sheet.cell(row=row_idx, column=col)
-                            _safe_set_cell_style(
-                                cell,
-                                font=Font(bold=True),
-                                fill=PatternFill(start_color="E2EFDA", end_color="E2EFDA",
-                                                 fill_type="solid")
-                            )
-                    elif val == '总计':
-                        sheet.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx,
-                                          end_column=3)
-                        merged_cell = sheet.cell(row=row_idx, column=1)
-                        try:
-                            merged_cell.value = '总计'
-                            _safe_set_cell_style(
-                                merged_cell,
-                                alignment=Alignment(horizontal='center', vertical='center')
-                            )
-                        except (AttributeError, TypeError):
-                            debug_print(f"无法给总计行 {row_idx} 的合并单元格赋值")
-                        for col in range(1, max_col + 1):
-                            cell = sheet.cell(row=row_idx, column=col)
-                            _safe_set_cell_style(
-                                cell,
-                                font=Font(bold=True),
-                                fill=PatternFill(start_color="D9E1F2", end_color="D9E1F2",
-                                                 fill_type="solid")
-                            )
-            except Exception as e:
-                debug_print(f"处理行 {row_idx} 样式时出错: {e}")
-                continue
-
-        # ---------- 7. 平台类别合并 ----------
-        if detail_rows:
-            platform_groups = defaultdict(list)
-            for r, plat, series, model in detail_rows:
-                platform_groups[plat].append((r, series, model))
-            for plat, rows in platform_groups.items():
-                start_r = rows[0][0]
-                end_r = rows[-1][0]
-                if len(rows) > 1:
-                    try:
-                        sheet.merge_cells(start_row=start_r, start_column=1,
-                                          end_row=end_r, end_column=1)
-                        merged_cell = sheet.cell(row=start_r, column=1)
-                        merged_cell.value = plat
-                    except Exception as e:
-                        debug_print(f"合并平台 {plat} 时出错: {e}")
+                end_idx = idx
+                while end_idx < len(rows) and str(rows[end_idx][1]) == str(series_val):
+                    end_idx += 1
+                if end_idx - idx > 1:
+                    start_r = rows[idx][0]
+                    end_r = rows[end_idx - 1][0]
+                    sheet.merge_cells(start_row=start_r, start_column=2,
+                                      end_row=end_r, end_column=2)
+                    merged_cell = sheet.cell(row=start_r, column=2)
+                    merged_cell.value = series_val
+                sub_rows = rows[idx:end_idx]
+                j = 0
+                while j < len(sub_rows):
+                    r_j, _, model_val_j = sub_rows[j]
+                    if model_val_j is None:
+                        j += 1
                         continue
+                    j2 = j
+                    while j2 < len(sub_rows) and sub_rows[j2][2] == model_val_j:
+                        j2 += 1
+                    if j2 - j > 1:
+                        start_r_model = sub_rows[j][0]
+                        end_r_model = sub_rows[j2 - 1][0]
+                        sheet.merge_cells(start_row=start_r_model, start_column=3,
+                                          end_row=end_r_model, end_column=3)
+                        merged_cell = sheet.cell(row=start_r_model, column=3)
+                        merged_cell.value = model_val_j
+                    j = j2
+                idx = end_idx
 
-        # ---------- 8. 产品系列合并 ----------
-        if detail_rows:
-            platform_groups = defaultdict(list)
-            for r, plat, series, model in detail_rows:
-                platform_groups[plat].append((r, series, model))
-            for plat, rows in platform_groups.items():
-                idx = 0
-                while idx < len(rows):
-                    row_idx, series_val, model_val = rows[idx]
-                    if series_val is None:
-                        idx += 1
-                        continue
-                    end_idx = idx
-                    while end_idx < len(rows) and str(rows[end_idx][1]) == str(series_val):
-                        end_idx += 1
-                    if end_idx - idx > 1:
-                        start_r = rows[idx][0]
-                        end_r = rows[end_idx - 1][0]
-                        try:
-                            sheet.merge_cells(start_row=start_r, start_column=2,
-                                              end_row=end_r, end_column=2)
-                            merged_cell = sheet.cell(row=start_r, column=2)
-                            merged_cell.value = series_val
-                        except Exception as e:
-                            debug_print(f"合并系列 {series_val} 时出错: {e}")
-                    sub_rows = rows[idx:end_idx]
-                    j = 0
-                    while j < len(sub_rows):
-                        r_j, _, model_val_j = sub_rows[j]
-                        if model_val_j is None:
-                            j += 1
-                            continue
-                        j2 = j
-                        while j2 < len(sub_rows) and sub_rows[j2][2] == model_val_j:
-                            j2 += 1
-                        if j2 - j > 1:
-                            start_r_model = sub_rows[j][0]
-                            end_r_model = sub_rows[j2 - 1][0]
-                            try:
-                                sheet.merge_cells(start_row=start_r_model, start_column=3,
-                                                  end_row=end_r_model, end_column=3)
-                                merged_cell = sheet.cell(row=start_r_model, column=3)
-                                merged_cell.value = model_val_j
-                            except Exception as e:
-                                debug_print(f"合并型号 {model_val_j} 时出错: {e}")
-                        j = j2
-                    idx = end_idx
+    # ---------- 9. 设置列宽 ----------
+    # 12列基础列宽
+    col_widths = {
+        1: 22,   # 平台类别
+        2: 18,   # 产品系列
+        3: 14,   # 产品型号
+        4: 18,   # 订单号
+        5: 14,   # 毛利情况(%)
+        6: 20,   # 低毛利原因
+        7: 14,   # 面积汇总
+        8: 16,   # 标准化
+        9: 16,   # 配置化
+        10: 16,  # 配置化理由
+        11: 16,  # 定制化
+        12: 14   # 定制原因
+    }
+    for col, width in col_widths.items():
+        if col <= max_col:
+            sheet.column_dimensions[get_column_letter(col)].width = width
 
-        # ---------- 9. 设置列宽 ----------
-        col_widths = {
-            1: 22, 2: 18, 3: 14, 4: 14, 5: 16, 6: 16, 7: 16,
-            8: 14, 9: 18, 10: 14, 11: 16, 12: 18, 13: 14, 14: 20
-        }
-        for col, width in col_widths.items():
-            if col <= max_col:
-                try:
-                    sheet.column_dimensions[get_column_letter(col)].width = width
-                except Exception as e:
-                    debug_print(f"设置列 {col} 宽度时出错: {e}")
-                    continue
+    # 区域列宽
+    for col in range(13, max_col + 1):
+        sheet.column_dimensions[get_column_letter(col)].width = 14
 
-        for col in range(15, max_col + 1):
-            try:
-                sheet.column_dimensions[get_column_letter(col)].width = 14
-            except Exception as e:
-                continue
+    debug_print("apply_merges 完成")
 
-        debug_print("apply_merges 完成")
 
-    except Exception as e:
-        debug_print(f"apply_merges 执行过程中出现错误: {e}")
-        raise
 
 # =============================================================================
 # HTML生成 - 适配新增列
