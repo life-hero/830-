@@ -100,52 +100,62 @@ def process_order_detail_data(df: pd.DataFrame) -> pd.DataFrame:
             - 毛利平均值
             - 低毛利原因明细 (按行展开)
     """
+
+    def convert_margin(val):
+        if pd.api.types.is_number(val):
+            return float(val)
+        s = str(val).strip()
+        if any('\u4e00' <= ch <= '\u9fff' for ch in s):
+            return float('nan')  # 改为 NaN，而不是 0
+        if s.endswith('%'):
+            try:
+                return float(s[:-1]) / 100.0
+            except ValueError:
+                return float('nan')
+        try:
+            return float(s)
+        except ValueError:
+            return float('nan')
+
     debug_print("开始 process_order_detail_data")
 
-    # 定义必需列
     required_cols = ['平台类别', '产品系列', '产品型号', '订单号列表', '毛利平均值', '订单号',
                      '毛利值', '低毛利原因']
 
     if df.empty:
-        # 返回空DataFrame但包含所有必需列
         return pd.DataFrame(columns=required_cols)
 
-    # 确保必需列存在
     source_cols = ['平台类别', '产品系列', '产品型号', '客户采购订单编号', '毛利情况', '低毛利原因']
     for col in source_cols:
         if col not in df.columns:
             debug_print(f"警告: 列 '{col}' 不存在，将创建空列")
             df[col] = ''
 
-    # 复制数据避免修改原始数据
     df_temp = df.copy()
-
-    # 处理空值
     df_temp['客户采购订单编号'] = df_temp['客户采购订单编号'].fillna('').astype(str)
     df_temp['低毛利原因'] = df_temp['低毛利原因'].fillna('').astype(str)
-    df_temp['毛利情况'] = pd.to_numeric(df_temp['毛利情况'], errors='coerce').fillna(0)
+    df_temp['毛利情况'] = df_temp['毛利情况'].apply(convert_margin)
+    # 不填充 NaN，保留以便后续处理
 
-    # 按分组聚合
     grouped = df_temp.groupby(['平台类别', '产品系列', '产品型号'], as_index=False)
 
-    # 聚合订单号：去重后合并为逗号分隔字符串
     def agg_order_numbers(group):
         orders = group['客户采购订单编号'].unique()
         orders = [o for o in orders if o and o != '']
         return ', '.join(orders) if orders else ''
 
-    # 聚合毛利：计算平均值
     def agg_profit_avg(group):
-        profits = group['毛利情况'].astype(float)
-        return profits.mean()
+        # 【修复】使用 pd.to_numeric 安全转换
+        profits = pd.to_numeric(group['毛利情况'], errors='coerce')
+        return profits.mean() if not profits.isna().all() else 0.0
 
-    # 聚合低毛利原因明细：保留每个订单号对应的原因
     def agg_low_profit_reasons(group):
         result = []
-        # 按订单号分组，取每个订单号对应的低毛利原因
         for order, sub_group in group.groupby('客户采购订单编号'):
             if order and order != '':
-                profit_avg = sub_group['毛利情况'].astype(float).mean()
+                # 【修复】安全转换
+                profit_values = pd.to_numeric(sub_group['毛利情况'], errors='coerce')
+                profit_avg = profit_values.mean() if not profit_values.isna().all() else 0.0
                 reasons = sub_group['低毛利原因'].unique()
                 reasons = [r for r in reasons if r and r != '']
                 if reasons:
@@ -163,14 +173,10 @@ def process_order_detail_data(df: pd.DataFrame) -> pd.DataFrame:
                     })
         return result
 
-    # 构建结果DataFrame
     result_rows = []
     for (plat, series, model), group in grouped:
-        # 基本聚合
         orders = agg_order_numbers(group)
         profit_avg = agg_profit_avg(group)
-
-        # 低毛利原因明细
         reasons_detail = agg_low_profit_reasons(group)
 
         if reasons_detail:
@@ -186,7 +192,6 @@ def process_order_detail_data(df: pd.DataFrame) -> pd.DataFrame:
                     '低毛利原因': item['低毛利原因']
                 })
         else:
-            # 无低毛利原因，只保留一行
             result_rows.append({
                 '平台类别': plat,
                 '产品系列': series,
@@ -200,7 +205,6 @@ def process_order_detail_data(df: pd.DataFrame) -> pd.DataFrame:
 
     result_df = pd.DataFrame(result_rows)
 
-    # 【修复】确保所有必需列都存在
     for col in required_cols:
         if col not in result_df.columns:
             result_df[col] = ''
@@ -253,17 +257,19 @@ def process_region_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # ---------- 毛利情况处理 ----------
     if '毛利情况' in df_temp.columns:
+        # 【修复】先转换毛利情况为数值
+        df_temp['毛利情况_数值'] = pd.to_numeric(df_temp['毛利情况'], errors='coerce')
+
         profit_group = df_temp.groupby(
             ['平台类别', '产品系列', '产品型号', '客户采购订单编号'],
             as_index=False
-        )['毛利情况'].mean()
-        profit_group.rename(columns={'毛利情况': '毛利平均值'}, inplace=True)
+        )['毛利情况_数值'].mean()
+        profit_group.rename(columns={'毛利情况_数值': '毛利平均值'}, inplace=True)
         pivot_df = pivot_df.merge(profit_group,
                                   on=['平台类别', '产品系列', '产品型号', '客户采购订单编号'],
                                   how='left')
         pivot_df['毛利平均值'] = pivot_df['毛利平均值'].fillna(0).round(2)
         pivot_df['毛利平均值'] = (pivot_df['毛利平均值'] * 100).round(2)
-        # pivot_df['毛利情况'] = f"{pivot_df['毛利平均值']}%" if pivot_df['毛利平均值'] > 0 else ''
     else:
         pivot_df['毛利平均值'] = 0
 
