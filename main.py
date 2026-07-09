@@ -32,9 +32,7 @@ def debug_print(msg: str) -> None:
 # ---------- 分类映射 ----------
 def classify_main_type(val: str) -> str:
     val_lower = val.lower()
-    if val_lower in ['pci-top', 'pci-top+']:
-        return '标准化'
-    elif val_lower in ['top+', 'top']:
+    if val_lower in ['pci-top', 'pci-top+'] or val_lower in ['top+', 'top']:
         return '标准化'
     elif val_lower == 'pci-non-top' or val_lower == 'non-top':
         return '配置化'
