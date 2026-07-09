@@ -31,11 +31,12 @@ def debug_print(msg: str) -> None:
 
 # ---------- 分类映射 ----------
 def classify_main_type(val: str) -> str:
-    if val in ['TOP', 'TOP+']:
+    val_lower = val.lower()
+    if val_lower in ['pci-top', 'pci-top+']:
         return '标准化'
-    elif val == 'NON-TOP':
+    elif val_lower == 'pci-non-top':
         return '配置化'
-    elif val == '定制':
+    elif '定制' == val:
         return '定制化'
     else:
         return '其他'
